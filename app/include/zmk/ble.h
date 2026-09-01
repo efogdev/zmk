@@ -40,6 +40,16 @@ bool zmk_ble_active_profile_is_open(void);
 bool zmk_ble_active_profile_is_connected(void);
 char *zmk_ble_active_profile_name(void);
 
+/* True while an external module has taken ownership of the BLE radio for
+ * another protocol. While true, ZMK must not start/update advertising or
+ * report the active profile as open. Default: never yielded. */
+bool zmk_ble_radio_yielded(void);
+
+/* Called once BLE settings have loaded and the stack is otherwise ready
+ * (end of zmk_ble_complete_startup). Extension point for modules that need
+ * to act on the profile ZMK booted into. Default: no-op. */
+void zmk_ble_on_ready(void);
+
 int zmk_ble_unpair_all(void);
 
 int zmk_ble_set_device_name(char *name);

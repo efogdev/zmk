@@ -70,13 +70,24 @@ BUILD_ASSERT(
     DEVICE_NAME_LEN <= CONFIG_BT_DEVICE_NAME_MAX,
     "ERROR: BLE device name is too long. Max length: " STRINGIFY(CONFIG_BT_DEVICE_NAME_MAX));
 
-static struct bt_data zmk_ble_ad[] = {
-    BT_DATA_BYTES(BT_DATA_GAP_APPEARANCE, 0xC1, 0x03),
+#define DEVICE_APPEARANCE                                                                          \
+    (uint8_t) CONFIG_BT_DEVICE_APPEARANCE, (uint8_t)(CONFIG_BT_DEVICE_APPEARANCE >> 8)
+
+static const struct bt_data zmk_ble_ad[] = {
+    BT_DATA_BYTES(BT_DATA_GAP_APPEARANCE, DEVICE_APPEARANCE),
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-    BT_DATA_BYTES(BT_DATA_UUID16_SOME, 0x12, 0x18, /* HID Service */
-                  0x0f, 0x18                       /* Battery Service */
-                  ),
+    BT_DATA_BYTES(BT_DATA_UUID16_SOME,
+      0x12, 0x18, /* HID Service    */
+      0x0f, 0x18  /* Battery Service */
+    ),
 };
+
+#if IS_ENABLED(CONFIG_ZMK_BLE_SHELL)
+#include "ble_shell_private.h"
+static const struct bt_data zbs_sd[] = {
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL, SVC_UUID_DATA),
+};
+#endif
 
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE) && IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 
@@ -95,7 +106,15 @@ static void raise_profile_changed_event_callback(struct k_work *work) {
 
 K_WORK_DEFINE(raise_profile_changed_event_work, raise_profile_changed_event_callback);
 
-bool zmk_ble_active_profile_is_open(void) { return zmk_ble_profile_is_open(active_profile); }
+bool __weak zmk_ble_radio_yielded(void) { return false; }
+void __weak zmk_ble_on_ready(void) { }
+
+bool zmk_ble_active_profile_is_open(void) {
+    if (zmk_ble_radio_yielded()) {
+        return false;
+    }
+    return zmk_ble_profile_is_open(active_profile);
+}
 
 bool zmk_ble_profile_is_open(uint8_t index) {
     if (index >= ZMK_BLE_PROFILE_COUNT) {
@@ -143,6 +162,17 @@ bool zmk_ble_profile_is_connected(uint8_t index) {
     return info.state == BT_CONN_STATE_CONNECTED;
 }
 
+static int adv_start(const struct bt_le_adv_param *param) {
+    if (zmk_ble_radio_yielded()) {
+        return 0;
+    }
+#if IS_ENABLED(CONFIG_ZMK_BLE_SHELL)
+    return bt_le_adv_start(param, zmk_ble_ad, ARRAY_SIZE(zmk_ble_ad), zbs_sd, ARRAY_SIZE(zbs_sd));
+#else
+    return bt_le_adv_start(param, zmk_ble_ad, ARRAY_SIZE(zmk_ble_ad), NULL, 0);
+#endif
+}
+
 #define CHECKED_ADV_STOP()                                                                         \
     err = bt_le_adv_stop();                                                                        \
     advertising_status = ZMK_ADV_NONE;                                                             \
@@ -159,8 +189,7 @@ bool zmk_ble_profile_is_connected(uint8_t index) {
         bt_conn_unref(conn);                                                                       \
         return 0;                                                                                  \
     }                                                                                              \
-    err = bt_le_adv_start(BT_LE_ADV_CONN_DIR_LOW_DUTY(addr), zmk_ble_ad, ARRAY_SIZE(zmk_ble_ad),   \
-                          NULL, 0);                                                                \
+    err = adv_start(BT_LE_ADV_CONN_DIR_LOW_DUTY(addr));                                            \
     if (err) {                                                                                     \
         LOG_ERR("Advertising failed to start (err %d)", err);                                      \
         return err;                                                                                \
@@ -168,7 +197,7 @@ bool zmk_ble_profile_is_connected(uint8_t index) {
     advertising_status = ZMK_ADV_DIR;
 
 #define CHECKED_OPEN_ADV()                                                                         \
-    err = bt_le_adv_start(ZMK_ADV_CONN_NAME, zmk_ble_ad, ARRAY_SIZE(zmk_ble_ad), NULL, 0);         \
+    err = adv_start(ZMK_ADV_CONN_NAME);                                                            \
     if (err) {                                                                                     \
         LOG_ERR("Advertising failed to start (err %d)", err);                                      \
         return err;                                                                                \
@@ -726,6 +755,7 @@ static int zmk_ble_complete_startup(void) {
     bt_conn_auth_info_cb_register(&zmk_ble_auth_info_cb_display);
 
     zmk_ble_ready(0);
+    zmk_ble_on_ready();
 
     return 0;
 }

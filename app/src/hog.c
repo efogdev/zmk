@@ -336,6 +336,9 @@ void send_keyboard_report_callback(struct k_work *work) {
 K_WORK_DEFINE(hog_keyboard_work, send_keyboard_report_callback);
 
 int zmk_hog_send_keyboard_report(struct zmk_hid_keyboard_report_body *report) {
+    if (zmk_ble_radio_yielded()) {
+        return 0;
+    }
     int err = k_msgq_put(&zmk_hog_keyboard_msgq, report, K_MSEC(100));
     if (err) {
         switch (err) {
@@ -388,6 +391,9 @@ void send_consumer_report_callback(struct k_work *work) {
 K_WORK_DEFINE(hog_consumer_work, send_consumer_report_callback);
 
 int zmk_hog_send_consumer_report(struct zmk_hid_consumer_report_body *report) {
+    if (zmk_ble_radio_yielded()) {
+        return 0;
+    }
     int err = k_msgq_put(&zmk_hog_consumer_msgq, report, K_MSEC(100));
     if (err) {
         switch (err) {
@@ -441,6 +447,9 @@ void send_mouse_report_callback(struct k_work *work) {
 K_WORK_DEFINE(hog_mouse_work, send_mouse_report_callback);
 
 int zmk_hog_send_mouse_report(struct zmk_hid_mouse_report_body *report) {
+    if (zmk_ble_radio_yielded()) {
+        return 0;
+    }
     int err = k_msgq_put(&zmk_hog_mouse_msgq, report, K_MSEC(100));
     if (err) {
         switch (err) {
