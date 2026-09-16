@@ -204,7 +204,9 @@ static int kscan_direct_read(const struct device *dev) {
             const bool pressed = zmk_debounce_is_pressed(deb_state);
 
             LOG_DBG("Sending event at 0,%i state %s", gpio->index, pressed ? "on" : "off");
-            data->callback(dev, 0, gpio->index, pressed);
+            if (data->callback != NULL) {
+                data->callback(dev, 0, gpio->index, pressed);
+            }
             if (config->toggle_mode && pressed) {
                 kscan_inputs_set_flags(&data->inputs, &gpio->spec);
             }
