@@ -107,7 +107,7 @@ static void raise_profile_changed_event_callback(struct k_work *work) {
 K_WORK_DEFINE(raise_profile_changed_event_work, raise_profile_changed_event_callback);
 
 bool __weak zmk_ble_radio_yielded(void) { return false; }
-void __weak zmk_ble_on_ready(void) { }
+bool __weak zmk_ble_on_ready(void) { return false; }
 
 bool zmk_ble_active_profile_is_open(void) {
     if (zmk_ble_radio_yielded()) {
@@ -204,6 +204,12 @@ static int adv_start(const struct bt_le_adv_param *param) {
     }                                                                                              \
     advertising_status = ZMK_ADV_CONN;
 
+int zmk_ble_adv_stop(void) {
+    int err = 0;
+    CHECKED_ADV_STOP();
+    return err;
+}
+
 int update_advertising(void) {
     int err = 0;
     bt_addr_le_t *addr;
@@ -222,8 +228,12 @@ int update_advertising(void) {
         // LOG_DBG("Directed advertising to %s", addr_str);
         // desired_adv = ZMK_ADV_DIR;
     }
-    LOG_DBG("advertising from %d to %d", advertising_status, desired_adv);
 
+    if (zmk_ble_radio_yielded()) {
+        desired_adv = ZMK_ADV_NONE;
+    }
+
+    LOG_DBG("advertising from %d to %d", advertising_status, desired_adv);
     switch (desired_adv + CURR_ADV(advertising_status)) {
     case ZMK_ADV_NONE + CURR_ADV(ZMK_ADV_DIR):
     case ZMK_ADV_NONE + CURR_ADV(ZMK_ADV_CONN):
@@ -244,6 +254,11 @@ int update_advertising(void) {
     case ZMK_ADV_CONN + CURR_ADV(ZMK_ADV_NONE):
         CHECKED_OPEN_ADV();
         break;
+    }
+
+    if (err == -EALREADY && desired_adv != ZMK_ADV_NONE) {
+        CHECKED_ADV_STOP();
+        CHECKED_OPEN_ADV();
     }
 
     return 0;
@@ -754,8 +769,9 @@ static int zmk_ble_complete_startup(void) {
     bt_conn_auth_cb_register(&zmk_ble_auth_cb_display);
     bt_conn_auth_info_cb_register(&zmk_ble_auth_info_cb_display);
 
-    zmk_ble_ready(0);
-    zmk_ble_on_ready();
+    if (!zmk_ble_on_ready()) {
+        zmk_ble_ready(0);
+    }
 
     return 0;
 }
