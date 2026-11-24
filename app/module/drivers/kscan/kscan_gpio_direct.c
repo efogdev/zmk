@@ -17,6 +17,11 @@
 
 #include <zmk/debounce.h>
 
+#if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
+#include <zephyr/init.h>
+#include <zmk_runtime_config/runtime_config.h>
+#endif
+
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #define DT_DRV_COMPAT zmk_kscan_gpio_direct
@@ -69,12 +74,12 @@ struct kscan_direct_data {
     int64_t scan_time;
     /** Current state of the inputs as an array of length config->inputs.len */
     struct zmk_debounce_state *pin_state;
-};
-
-struct kscan_direct_config {
     struct zmk_debounce_config debounce_config;
     int32_t debounce_scan_period_ms;
     int32_t poll_period_ms;
+};
+
+struct kscan_direct_config {
     bool toggle_mode;
 };
 
@@ -150,10 +155,9 @@ static int kscan_inputs_set_flags(const struct kscan_gpio_list *inputs,
 }
 
 static void kscan_direct_read_continue(const struct device *dev) {
-    const struct kscan_direct_config *config = dev->config;
     struct kscan_direct_data *data = dev->data;
 
-    data->scan_time += config->debounce_scan_period_ms;
+    data->scan_time += data->debounce_scan_period_ms;
 
     k_work_reschedule(&data->work, K_TIMEOUT_ABS_MS(data->scan_time));
 }
@@ -164,9 +168,8 @@ static void kscan_direct_read_end(const struct device *dev) {
     kscan_direct_interrupt_enable(dev);
 #else
     struct kscan_direct_data *data = dev->data;
-    const struct kscan_direct_config *config = dev->config;
 
-    data->scan_time += config->poll_period_ms;
+    data->scan_time += data->poll_period_ms;
 
     // Return to polling slowly.
     k_work_reschedule(&data->work, K_TIMEOUT_ABS_MS(data->scan_time));
@@ -189,8 +192,8 @@ static int kscan_direct_read(const struct device *dev) {
             return active;
         }
 
-        zmk_debounce_update(&data->pin_state[gpio->index], active, config->debounce_scan_period_ms,
-                            &config->debounce_config);
+        zmk_debounce_update(&data->pin_state[gpio->index], active, data->debounce_scan_period_ms,
+                            &data->debounce_config);
     }
 
     // Process the new state.
@@ -397,9 +400,6 @@ static const struct kscan_driver_api kscan_direct_api = {
     static struct kscan_direct_data kscan_direct_data_##n = {                                      \
         .inputs = KSCAN_GPIO_LIST(kscan_direct_inputs_##n),                                        \
         .pin_state = kscan_direct_state_##n,                                                       \
-        COND_INTERRUPTS((.irqs = kscan_direct_irqs_##n, ))};                                       \
-                                                                                                   \
-    static const struct kscan_direct_config kscan_direct_config_##n = {                            \
         .debounce_config =                                                                         \
             {                                                                                      \
                 .debounce_press_ms = INST_DEBOUNCE_PRESS_MS(n),                                    \
@@ -407,6 +407,9 @@ static const struct kscan_driver_api kscan_direct_api = {
             },                                                                                     \
         .debounce_scan_period_ms = DT_INST_PROP(n, debounce_scan_period_ms),                       \
         .poll_period_ms = DT_INST_PROP(n, poll_period_ms),                                         \
+        COND_INTERRUPTS((.irqs = kscan_direct_irqs_##n, ))};                                       \
+                                                                                                   \
+    static const struct kscan_direct_config kscan_direct_config_##n = {                            \
         .toggle_mode = DT_INST_PROP(n, toggle_mode),                                               \
     };                                                                                             \
                                                                                                    \
@@ -417,3 +420,39 @@ static const struct kscan_driver_api kscan_direct_api = {
                           &kscan_direct_api);
 
 DT_INST_FOREACH_STATUS_OKAY(KSCAN_DIRECT_INIT);
+
+#if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
+
+#define COND_POLLING(code) COND_CODE_1(CONFIG_ZMK_KSCAN_DIRECT_POLLING, code, ())
+
+#define INST_ZRC_KEY(n, name) "kscan" STRINGIFY(n) "/" name
+
+#define INST_ZRC_ENTRY(n, name, field)                                                             \
+    {INST_ZRC_KEY(n, name), &kscan_direct_data_##n.field, sizeof(kscan_direct_data_##n.field)},
+
+#define INST_ZRC_CACHE(n)                                                                          \
+    static const struct zrc_cache_entry kscan_direct_zrc_cache_##n[] = {                           \
+        INST_ZRC_ENTRY(n, "deb_press_ms", debounce_config.debounce_press_ms)                       \
+        INST_ZRC_ENTRY(n, "deb_release_ms", debounce_config.debounce_release_ms)                   \
+        INST_ZRC_ENTRY(n, "deb_scan_ms", debounce_scan_period_ms)                                  \
+        COND_POLLING((INST_ZRC_ENTRY(n, "poll_ms", poll_period_ms)))                               \
+    };
+
+#define INST_ZRC_PARAM(n, name, def, min, max) zrc_register(INST_ZRC_KEY(n, name), def, min, max);
+
+#define INST_ZRC_REG(n)                                                                            \
+    INST_ZRC_PARAM(n, "deb_press_ms", INST_DEBOUNCE_PRESS_MS(n), 0, DEBOUNCE_COUNTER_MAX)          \
+    INST_ZRC_PARAM(n, "deb_release_ms", INST_DEBOUNCE_RELEASE_MS(n), 0, DEBOUNCE_COUNTER_MAX)      \
+    INST_ZRC_PARAM(n, "deb_scan_ms", DT_INST_PROP(n, debounce_scan_period_ms), 1, 1000)            \
+    COND_POLLING((INST_ZRC_PARAM(n, "poll_ms", DT_INST_PROP(n, poll_period_ms), 1, 1000)))         \
+    zrc_cache_register(kscan_direct_zrc_cache_##n, ARRAY_SIZE(kscan_direct_zrc_cache_##n));
+
+DT_INST_FOREACH_STATUS_OKAY(INST_ZRC_CACHE)
+
+static int kscan_direct_register_runtime_params(void) {
+    DT_INST_FOREACH_STATUS_OKAY(INST_ZRC_REG)
+    return 0;
+}
+SYS_INIT(kscan_direct_register_runtime_params, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE);
+
+#endif // IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
